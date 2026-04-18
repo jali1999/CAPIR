@@ -340,8 +340,8 @@ def parse_patent_id(filepath):
 
 
 def make_data_list(phase):
-    csv_root = "/home/lja/nas/deeppatent2/patent_batch/"
-    train_caption_root = "/home/lja/nas/deeppatent2/captions_enh/train_dataset_trn/"
+    csv_root = "/home/data/nas/deeppatent2/patent_batch/"
+    train_caption_root = "/home/data/nas/deeppatent2/captions_enh/train_dataset_trn/"
 
     csv_paths = {
         "train": os.path.join(csv_root, "train_dataset_trn_new.csv"),
@@ -354,7 +354,7 @@ def make_data_list(phase):
     if phase not in csv_paths:
         raise ValueError(f"Unknown phase: {phase}")
 
-    img_root = "/home/lja/nas/deeppatent2/"
+    img_root = "/home/data/nas/deeppatent2/"
     
     if phase == "train":
         train_csv_files = sorted([
@@ -662,7 +662,7 @@ if __name__ == '__main__':
     checkpoint_dir = 'checkpoints_aslloss_fusion_to_fusion_v2'
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    checkpoints_path = "/home/lja/DesignCLIP-main/checkpoints_aslloss_image_to_image_v1/best_model.pth"
+    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_aslloss_image_to_image_v1/best_model.pth"
     pretrained_model = torch.load(checkpoints_path, map_location=device)
     model.load_state_dict(pretrained_model['model_state_dict'], strict=False)
     

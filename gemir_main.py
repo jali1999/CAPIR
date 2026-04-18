@@ -662,7 +662,7 @@ if __name__ == '__main__':
     checkpoint_dir = 'checkpoints_aslloss_fusion_to_fusion_v2'
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_aslloss_image_to_image_v1/best_model.pth"
+    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_aslloss_image_to_image_v1/model_epoch_10.pth"
     pretrained_model = torch.load(checkpoints_path, map_location=device)
     model.load_state_dict(pretrained_model['model_state_dict'], strict=False)
     

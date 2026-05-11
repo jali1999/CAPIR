@@ -9,7 +9,6 @@ import random
 from PIL import ImageFilter
 import torch.utils.data as data
 from PIL import Image
-
 import cv2
 import os
 import gc
@@ -22,9 +21,6 @@ from torchmetrics.retrieval import RetrievalMAP, RetrievalMRR, RetrievalPrecisio
 
 
 def seed_everything(seed=42):
-    """
-    Sets the seed for generating random numbers to ensure reproducibility.
-    """
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
@@ -58,9 +54,7 @@ class GatedFusion(nn.Module):
         )
 
     def forward(self, x):
-        weight = self.gate(x)
-        return x * weight
-
+        return self.gate(x)
 
 class PatentNet(nn.Module):
     def __init__(self, model, embedding_size, use_text, text_dropout):
@@ -327,10 +321,6 @@ def valuation_calc(model, classifier_head, loss_func, device, val_query_loader, 
 
 
 def parse_patent_id(filepath):
-    """
-    Efficiently extract patent ID from filepath
-    Uses string operations instead of regex for better performance
-    """
     filename = os.path.basename(filepath)
     raw_id = filename.split('-')[0]
     if raw_id.startswith('US'):
@@ -522,9 +512,6 @@ class PatentDataset(data.Dataset):
 
 
 class AsymmetricLossOptimized(nn.Module):
-    ''' Notice - optimized version, minimizes memory allocation and gpu uploading,
-    favors inplace operations'''
-
     def __init__(self, gamma_neg=4, gamma_pos=1, clip=0.05, eps=1e-8, disable_torch_grad_focal_loss=False):
         super(AsymmetricLossOptimized, self).__init__()
 
@@ -537,13 +524,6 @@ class AsymmetricLossOptimized(nn.Module):
         self.targets = self.anti_targets = self.xs_pos = self.xs_neg = self.asymmetric_w = self.loss = None
 
     def forward(self, x, y):
-        """"
-        Parameters
-        ----------
-        x: input logits
-        y: targets (multi-label binarized vector)
-        """
-
         self.targets = y
         self.anti_targets = 1 - y
 
@@ -574,12 +554,12 @@ class AsymmetricLossOptimized(nn.Module):
 
 if __name__ == '__main__':
     seed_everything(42)
-
+    # params
     device = torch.device("cuda")
     batch_size = 256
     num_workers = 4
     eval_batch_size = 256
-    use_text = False
+    use_text = True
 
     train_list, train_label_list, train_desc_list, train_pid_list = make_data_list(phase="train")
     test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list = make_data_list(
@@ -594,6 +574,7 @@ if __name__ == '__main__':
         for sublist in dataset_labels:
             for lbl in sublist:
                 all_labels.add(lbl)
+
     sorted_unique_labels = sorted(list(all_labels))
     num_classes = len(sorted_unique_labels)
     print("num_classes: ", num_classes)
@@ -619,27 +600,18 @@ if __name__ == '__main__':
         ])
     }
 
-    train_data = PatentDataset(train_list, train_label_list, train_desc_list, train_pid_list, data_transform['train'],
-                               label_map)
-    test_query_data = PatentDataset(test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list,
-                                    data_transform['val'],
-                                    label_map)
-    test_db_data = PatentDataset(test_db_list, test_db_label_list, test_db_desc_list, test_db_pid_list,
-                                 data_transform['val'], label_map)
-    val_query_data = PatentDataset(val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list,
-                                   data_transform['val'],
-                                   label_map)
-    val_db_data = PatentDataset(val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list,
-                                data_transform['val'], label_map)
+    train_data = PatentDataset(train_list, train_label_list, train_desc_list, train_pid_list, data_transform['train'], label_map)
+    test_query_data = PatentDataset(test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list, data_transform['val'], label_map)
+    test_db_data = PatentDataset(test_db_list, test_db_label_list, test_db_desc_list, test_db_pid_list, data_transform['val'], label_map)
+    val_query_data = PatentDataset(val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list, data_transform['val'], label_map)
+    val_db_data = PatentDataset(val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list, data_transform['val'], label_map)
 
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers,
-                                               drop_last=True)
-    val_query_loader = torch.utils.data.DataLoader(val_query_data, batch_size=batch_size, num_workers=num_workers,
-                                                   drop_last=False)
+    train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+    val_query_loader = torch.utils.data.DataLoader(val_query_data, batch_size=batch_size, num_workers=num_workers, drop_last=False)
 
     model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai', device=device)
     embedding_size = 512
-
+    
     model = PatentNet(model, embedding_size=embedding_size, use_text=use_text, text_dropout=0.0).to(device)
     model = nn.DataParallel(model)
     
@@ -650,11 +622,11 @@ if __name__ == '__main__':
         {'params': model.parameters(), 'lr': 5e-6, 'weight_decay': 1e-4},
         {'params': classifier_head.parameters(), 'lr': 5e-5, 'weight_decay': 1e-4}
     ])
-
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
 
     best_val_map = 0.0
     best_epoch = 0
+    
     patience = 5
     patience_counter = 0
     
@@ -663,13 +635,16 @@ if __name__ == '__main__':
     
     checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_impressionclip_v1/model_epoch_12.pth"
     pretrained_model = torch.load(checkpoints_path, map_location=device)
-    model.load_state_dict(pretrained_model['model_state_dict'], strict=False)
+    
+    model.load_state_dict(pretrained_model['model_state_dict'])
+    classifier_head.load_state_dict(pretrained_model['classifier_head_dict'])
     
     history = {'train_loss': [], 'val_loss': [], 'val_map': [], 'test_map': []}
-
     num_epochs = 3
+    
     for epoch in range(1, num_epochs + 1):
         print(f"\n{'=' * 60}\nEpoch {epoch}/{num_epochs}\n{'=' * 60}")
+        
         train_loss = train(model, classifier_head, loss_func, device, train_loader, optimizer, epoch)
         history['train_loss'].append(train_loss)
         val_loss = valuation_calc(model, classifier_head, loss_func, device, val_query_loader, epoch)

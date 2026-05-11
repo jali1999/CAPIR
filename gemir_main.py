@@ -1,6 +1,4 @@
 import torch
-torch.backends.cudnn.enabled = False
-torch.backends.cudnn.benchmark = False
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -11,6 +9,7 @@ import random
 from PIL import ImageFilter
 import torch.utils.data as data
 from PIL import Image
+
 import cv2
 import os
 import gc
@@ -580,11 +579,11 @@ if __name__ == '__main__':
     batch_size = 256
     num_workers = 4
     eval_batch_size = 256
-    use_text = True
+    use_text = False
 
     train_list, train_label_list, train_desc_list, train_pid_list = make_data_list(phase="train")
     test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list = make_data_list(
-        phase="test_query")
+    phase="test_query")
     test_db_list, test_db_label_list, test_db_desc_list, test_db_pid_list = make_data_list(phase="test_db")
     val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list = make_data_list(phase="val_query")
     val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list = make_data_list(phase="val_db")
@@ -652,23 +651,23 @@ if __name__ == '__main__':
         {'params': classifier_head.parameters(), 'lr': 5e-5, 'weight_decay': 1e-4}
     ])
 
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
 
     best_val_map = 0.0
     best_epoch = 0
-    patience = 3
+    patience = 5
     patience_counter = 0
     
-    checkpoint_dir = 'checkpoints_aslloss_fusion_to_fusion_v2'
+    checkpoint_dir = '/home/data/DesignCLIP-main/checkpoints_impressionclip_v2'
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_aslloss_image_to_image_v1/model_epoch_10.pth"
+    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_impressionclip_v1/model_epoch_12.pth"
     pretrained_model = torch.load(checkpoints_path, map_location=device)
     model.load_state_dict(pretrained_model['model_state_dict'], strict=False)
     
     history = {'train_loss': [], 'val_loss': [], 'val_map': [], 'test_map': []}
 
-    num_epochs = 10
+    num_epochs = 3
     for epoch in range(1, num_epochs + 1):
         print(f"\n{'=' * 60}\nEpoch {epoch}/{num_epochs}\n{'=' * 60}")
         train_loss = train(model, classifier_head, loss_func, device, train_loader, optimizer, epoch)
@@ -689,6 +688,7 @@ if __name__ == '__main__':
 
         scheduler.step(val_map)
         epoch_save_path = os.path.join(checkpoint_dir, f'model_epoch_{epoch}.pth')
+        
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),

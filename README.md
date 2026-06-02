@@ -1,4 +1,4 @@
-# CAPIR
+# CAPIR: A Benchmark on Class-Aware Patent Image Retrieval
 # README
 
 The test code is provided in `gemir_main.py`. We will release the training code for the GemIR model soon.

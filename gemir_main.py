@@ -9,8 +9,10 @@ import random
 from PIL import ImageFilter
 import torch.utils.data as data
 from PIL import Image
+
 import cv2
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 import gc
 import pandas as pd
 import numpy as np
@@ -21,6 +23,9 @@ from torchmetrics.retrieval import RetrievalMAP, RetrievalMRR, RetrievalPrecisio
 
 
 def seed_everything(seed=42):
+    """
+    Sets the seed for generating random numbers to ensure reproducibility.
+    """
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
@@ -54,7 +59,9 @@ class GatedFusion(nn.Module):
         )
 
     def forward(self, x):
-        return self.gate(x)
+        weight = self.gate(x)
+        return x * weight
+
 
 class PatentNet(nn.Module):
     def __init__(self, model, embedding_size, use_text, text_dropout):
@@ -321,6 +328,10 @@ def valuation_calc(model, classifier_head, loss_func, device, val_query_loader, 
 
 
 def parse_patent_id(filepath):
+    """
+    Efficiently extract patent ID from filepath
+    Uses string operations instead of regex for better performance
+    """
     filename = os.path.basename(filepath)
     raw_id = filename.split('-')[0]
     if raw_id.startswith('US'):
@@ -329,9 +340,7 @@ def parse_patent_id(filepath):
 
 
 def make_data_list(phase):
-    csv_root = "/home/data/nas/deeppatent2/patent_batch/"
-    train_caption_root = "/home/data/nas/deeppatent2/captions_enh/train_dataset_trn/"
-
+    csv_root = "/home/lja/nas/deeppatent2/patent_batch/"
     csv_paths = {
         "train": os.path.join(csv_root, "train_dataset_trn_new.csv"),
         "test_query": os.path.join(csv_root, "test_query_dataset_new.csv"),
@@ -343,113 +352,47 @@ def make_data_list(phase):
     if phase not in csv_paths:
         raise ValueError(f"Unknown phase: {phase}")
 
-    img_root = "/home/data/nas/deeppatent2/"
-    
-    if phase == "train":
-        train_csv_files = sorted([
-            os.path.join(train_caption_root, f)
-            for f in os.listdir(train_caption_root)
-            if f.endswith(".csv")
-        ])
+    csv_file = csv_paths[phase]
+    if not os.path.exists(csv_file):
+        raise FileNotFoundError(f"CSV file not found: {csv_file}")
 
-        if len(train_csv_files) == 0:
-            raise FileNotFoundError(f"No csv files found in: {train_caption_root}")
+    df = pd.read_csv(csv_file)
 
-        sample_df = pd.read_csv(train_csv_files[0])
-        required_cols = ["filepath", "caption", "class_related_loc"]
-        for col in required_cols:
-            if col not in sample_df.columns:
-                raise KeyError(f"Column '{col}' missing in {train_csv_files[0]}. Found: {list(sample_df.columns)}")
+    required_cols = ["filepath", "caption", "class_related_loc"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise KeyError(f"Column '{col}' missing in {csv_file}. Found: {list(df.columns)}")
 
-        sample_dict = {}
+    img_root = "/home/lja/nas/deeppatent2/"
 
-        for csv_file in train_csv_files:
-            df = pd.read_csv(csv_file)
+    path_list = []
+    desc_list = []
+    label_list = []
+    pid_list = []
 
-            for col in required_cols:
-                if col not in df.columns:
-                    raise KeyError(f"Column '{col}' missing in {csv_file}. Found: {list(df.columns)}")
+    for _, row in df.iterrows():
+        rel_path = str(row["filepath"]).strip()
+        full_path = os.path.join(img_root, rel_path)
+        path_list.append(full_path)
 
-            for _, row in df.iterrows():
-                rel_path = str(row["filepath"]).strip()
+        pid = parse_patent_id(rel_path)
+        pid_list.append(pid)
 
-                if rel_path not in sample_dict:
-                    full_path = os.path.join(img_root, rel_path)
-                    pid = parse_patent_id(rel_path)
+        caption = str(row["caption"]).strip()
+        if caption.lower() == "nan" or caption == "":
+            caption = " "
+        desc_list.append(caption)
 
-                    loc_str = str(row["class_related_loc"]).strip()
-                    if loc_str.lower() == "nan" or loc_str == "":
-                        labels = []
-                    else:
-                        raw = [x.strip() for x in loc_str.replace(";", " ").split()]
-                        labels = sorted(list(set(int(x) for x in raw if x.isdigit())))
+        loc_str = str(row["class_related_loc"]).strip()
+        if loc_str.lower() == "nan" or loc_str == "":
+            labels = []
+        else:
+            raw = [x.strip() for x in loc_str.replace(";", " ").split()]
+            labels = sorted(list(set(int(x) for x in raw if x.isdigit())))
+        label_list.append(labels)
 
-                    sample_dict[rel_path] = {
-                        "full_path": full_path,
-                        "labels": labels,
-                        "captions": [],
-                        "pid": pid,
-                    }
-
-                caption = str(row["caption"]).strip()
-                if caption.lower() == "nan" or caption == "":
-                    caption = " "
-                sample_dict[rel_path]["captions"].append(caption)
-
-        path_list = []
-        desc_list = []
-        label_list = []
-        pid_list = []
-
-        for rel_path, item in sample_dict.items():
-            path_list.append(item["full_path"])
-            desc_list.append(item["captions"])
-            label_list.append(item["labels"])
-            pid_list.append(item["pid"])
-
-        print(f"[{phase}] Loaded {len(path_list)} unique samples from {len(train_csv_files)} csv files in {train_caption_root}")
-        return path_list, label_list, desc_list, pid_list
-
-    else:
-        csv_file = csv_paths[phase]
-        if not os.path.exists(csv_file):
-            raise FileNotFoundError(f"CSV file not found: {csv_file}")
-
-        df = pd.read_csv(csv_file)
-
-        required_cols = ["filepath", "caption", "class_related_loc"]
-        for col in required_cols:
-            if col not in df.columns:
-                raise KeyError(f"Column '{col}' missing in {csv_file}. Found: {list(df.columns)}")
-
-        path_list = []
-        desc_list = []
-        label_list = []
-        pid_list = []
-
-        for _, row in df.iterrows():
-            rel_path = str(row["filepath"]).strip()
-            full_path = os.path.join(img_root, rel_path)
-            path_list.append(full_path)
-
-            pid = parse_patent_id(rel_path)
-            pid_list.append(pid)
-
-            caption = str(row["caption"]).strip()
-            if caption.lower() == "nan" or caption == "":
-                caption = " "
-            desc_list.append(caption)
-
-            loc_str = str(row["class_related_loc"]).strip()
-            if loc_str.lower() == "nan" or loc_str == "":
-                labels = []
-            else:
-                raw = [x.strip() for x in loc_str.replace(";", " ").split()]
-                labels = sorted(list(set(int(x) for x in raw if x.isdigit())))
-            label_list.append(labels)
-
-        print(f"[{phase}] Loaded {len(path_list)} samples from {csv_file}")
-        return path_list, label_list, desc_list, pid_list
+    print(f"[{phase}] Loaded {len(path_list)} samples from {csv_file}")
+    return path_list, label_list, desc_list, pid_list
 
 
 def cv2pil(image):
@@ -482,7 +425,7 @@ class PatentDataset(data.Dataset):
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             img = np.zeros((224, 224), dtype=np.uint8)
-    
+
         _, img = cv2.threshold(img, 120, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
@@ -491,27 +434,24 @@ class PatentDataset(data.Dataset):
             img = img[y:y + h, x:x + w]
         img = cv2pil(img)
         img = self.transform(img)
-    
+
         desc = self.desc_list[index]
-        if isinstance(desc, list):
-            if len(desc) > 0:
-                desc = random.choice(desc)
-            else:
-                desc = " "
-    
         raw_labels = self.label_list[index]
         pid = self.pid_list[index]
-    
+
         label_vec = torch.zeros(self.num_classes, dtype=torch.float32)
         for raw_id in raw_labels:
             if raw_id in self.label_map:
                 mapped_idx = self.label_map[raw_id]
                 label_vec[mapped_idx] = 1.0
-    
+
         return (img, desc), label_vec, pid
 
 
 class AsymmetricLossOptimized(nn.Module):
+    ''' Notice - optimized version, minimizes memory allocation and gpu uploading,
+    favors inplace operations'''
+
     def __init__(self, gamma_neg=4, gamma_pos=1, clip=0.05, eps=1e-8, disable_torch_grad_focal_loss=False):
         super(AsymmetricLossOptimized, self).__init__()
 
@@ -524,6 +464,13 @@ class AsymmetricLossOptimized(nn.Module):
         self.targets = self.anti_targets = self.xs_pos = self.xs_neg = self.asymmetric_w = self.loss = None
 
     def forward(self, x, y):
+        """"
+        Parameters
+        ----------
+        x: input logits
+        y: targets (multi-label binarized vector)
+        """
+
         self.targets = y
         self.anti_targets = 1 - y
 
@@ -554,23 +501,21 @@ class AsymmetricLossOptimized(nn.Module):
 
 if __name__ == '__main__':
     seed_everything(42)
-    # params
     device = torch.device("cuda")
+
     batch_size = 256
     num_workers = 4
     eval_batch_size = 256
     use_text = True
 
-    train_list, train_label_list, train_desc_list, train_pid_list = make_data_list(phase="train")
-    test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list = make_data_list(
-    phase="test_query")
-    test_db_list, test_db_label_list, test_db_desc_list, test_db_pid_list = make_data_list(phase="test_db")
-    val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list = make_data_list(phase="val_query")
-    val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list = make_data_list(phase="val_db")
+    train_list, train_label_list, train_desc_list, train_pid_list = make_data_list("train")
+    test_query_list, test_query_label_list, test_query_desc_list, test_query_pid_list = make_data_list("test_query")
+    test_db_list, test_db_label_list, test_db_desc_list, test_db_pid_list = make_data_list("test_db")
+    val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list = make_data_list("val_query")
+    val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list = make_data_list("val_db")
 
     all_labels = set()
-    for dataset_labels in [train_label_list, val_db_label_list, val_query_label_list, test_db_label_list,
-                           test_query_label_list]:
+    for dataset_labels in [train_label_list, val_db_label_list, val_query_label_list, test_db_label_list, test_query_label_list]:
         for sublist in dataset_labels:
             for lbl in sublist:
                 all_labels.add(lbl)
@@ -606,95 +551,30 @@ if __name__ == '__main__':
     val_query_data = PatentDataset(val_query_list, val_query_label_list, val_query_desc_list, val_query_pid_list, data_transform['val'], label_map)
     val_db_data = PatentDataset(val_db_list, val_db_label_list, val_db_desc_list, val_db_pid_list, data_transform['val'], label_map)
 
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
-    val_query_loader = torch.utils.data.DataLoader(val_query_data, batch_size=batch_size, num_workers=num_workers, drop_last=False)
+    train_loader = torch.utils.data.DataLoader(
+        train_data, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, drop_last=True
+    )
+    val_query_loader = torch.utils.data.DataLoader(
+        val_query_data, batch_size=batch_size,
+        num_workers=num_workers, drop_last=False
+    )
 
-    model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai', device=device)
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        'ViT-B-32', pretrained='openai', device=device
+    )
+
     embedding_size = 512
-    
-    model = PatentNet(model, embedding_size=embedding_size, use_text=use_text, text_dropout=0.0).to(device)
+    model = PatentNet(
+        model, embedding_size=embedding_size,
+        use_text=use_text, text_dropout=0.0
+    ).to(device)
     model = nn.DataParallel(model)
-    
-    loss_func = AsymmetricLossOptimized(gamma_neg=4, gamma_pos=1, clip=0.05).to(device)
-    classifier_head = MultiLabelClassifier(embedding_size, num_classes).to(device)
 
-    optimizer = optim.AdamW([
-        {'params': model.parameters(), 'lr': 5e-6, 'weight_decay': 1e-4},
-        {'params': classifier_head.parameters(), 'lr': 5e-5, 'weight_decay': 1e-4}
-    ])
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
-
-    best_val_map = 0.0
-    best_epoch = 0
-    
-    patience = 5
-    patience_counter = 0
-    
-    checkpoint_dir = '/home/data/DesignCLIP-main/checkpoints_impressionclip_v2'
+    checkpoint_dir = "../nas/241/checkpoints/checkpoints_impressionclip_mm/"
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    checkpoints_path = "/home/data/DesignCLIP-main/checkpoints_impressionclip_v1/model_epoch_12.pth"
-    pretrained_model = torch.load(checkpoints_path, map_location=device)
-    
-    model.load_state_dict(pretrained_model['model_state_dict'])
-    classifier_head.load_state_dict(pretrained_model['classifier_head_dict'])
-    
-    history = {'train_loss': [], 'val_loss': [], 'val_map': [], 'test_map': []}
-    num_epochs = 3
-    
-    for epoch in range(1, num_epochs + 1):
-        print(f"\n{'=' * 60}\nEpoch {epoch}/{num_epochs}\n{'=' * 60}")
-        
-        train_loss = train(model, classifier_head, loss_func, device, train_loader, optimizer, epoch)
-        history['train_loss'].append(train_loss)
-        val_loss = valuation_calc(model, classifier_head, loss_func, device, val_query_loader, epoch)
-        history['val_loss'].append(val_loss)
-
-        val_accuracies = valuation(val_db_data, val_query_data, model, device, batch_size=eval_batch_size)
-        val_map = val_accuracies["map_at_5"]
-        history['val_map'].append(val_map)
-
-        if epoch % 1 == 0:
-            print("\n--- Test Set Evaluation ---")
-            test_accuracies = test(test_db_data, test_query_data, model, device, batch_size=eval_batch_size)
-            history['test_map'].append(test_accuracies["map_at_5"])
-        else:
-            history['test_map'].append(None)
-
-        scheduler.step(val_map)
-        epoch_save_path = os.path.join(checkpoint_dir, f'model_epoch_{epoch}.pth')
-        
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'classifier_head_dict': classifier_head.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'val_map': val_map,
-        }, epoch_save_path)
-        print(f"Saved checkpoint for epoch {epoch} to {epoch_save_path}")
-
-        if val_map > best_val_map:
-            best_val_map = val_map
-            best_epoch = epoch
-            patience_counter = 0
-            best_model_path = os.path.join(checkpoint_dir, 'best_model.pth')
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'classifier_head_dict': classifier_head.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_map': val_map,
-            }, best_model_path)
-            print(f"New best model saved! mAP@5 (Unique IDs): {val_map:.4f}")
-        else:
-            patience_counter += 1
-            print(f"No improvement. Patience: {patience_counter}/{patience}")
-
-        if patience_counter >= patience:
-            print("Early stopping triggered.")
-            break
 
     print("Training completed. Loading best model for final test.")
-    checkpoint = torch.load(os.path.join(checkpoint_dir, 'best_model.pth'))
+    checkpoint = torch.load(os.path.join(checkpoint_dir, "best_model.pth"), map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     test(test_db_data, test_query_data, model, device, batch_size=eval_batch_size)
